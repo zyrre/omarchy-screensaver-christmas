@@ -140,9 +140,9 @@ class SnowIterator(BaseEffectIterator[SnowConfig]):
             snow_scene = character.animation.new_scene()
             snow_scene.add_frame(snow_symbol, 1, colors=ColorPair(fg=snow_color))
 
-            # Block appearance after landing
+            # Block appearance after landing - use input symbol to reveal text
             block_scene = character.animation.new_scene()
-            block_scene.add_frame("█", 1, colors=ColorPair(fg=snow_color))
+            block_scene.add_frame(character.input_symbol, 1, colors=ColorPair(fg=snow_color))
 
             character.animation.activate_scene(snow_scene)
 
@@ -176,6 +176,14 @@ class SnowIterator(BaseEffectIterator[SnowConfig]):
                 fall_path,
                 character.event_handler.Action.ACTIVATE_SCENE,
                 block_scene
+            )
+
+            # Also ensure position is set correctly when path completes
+            character.event_handler.register_event(
+                character.event_handler.Event.PATH_COMPLETE,
+                fall_path,
+                character.event_handler.Action.SET_COORDINATE,
+                character.input_coord
             )
 
             character.motion.activate_path(fall_path)
