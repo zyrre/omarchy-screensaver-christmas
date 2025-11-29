@@ -134,11 +134,15 @@ class SnowIterator(BaseEffectIterator[SnowConfig]):
         """Build the initial state of the effect."""
         # Setup text characters - falling snow effect
         for character in self.terminal.get_characters():
-            # Snow appearance - keep as snowflakes throughout
+            # Snow appearance while falling
             snow_symbol = random.choice(self.config.snow_symbols)
             snow_color = random.choice(self.config.snow_colors)
             snow_scene = character.animation.new_scene()
             snow_scene.add_frame(snow_symbol, 1, colors=ColorPair(fg=snow_color))
+
+            # Block appearance after landing
+            block_scene = character.animation.new_scene()
+            block_scene.add_frame("█", 1, colors=ColorPair(fg=snow_color))
 
             character.animation.activate_scene(snow_scene)
 
@@ -166,7 +170,16 @@ class SnowIterator(BaseEffectIterator[SnowConfig]):
             # Final waypoint at input position
             fall_path.new_waypoint(character.input_coord)
 
+            # Use event handler to automatically switch to block when path completes
+            character.event_handler.register_event(
+                character.event_handler.Event.PATH_COMPLETE,
+                fall_path,
+                character.event_handler.Action.ACTIVATE_SCENE,
+                block_scene
+            )
+
             character.motion.activate_path(fall_path)
+
             self.pending_chars.append(character)
 
         # Sort by row (bottom to top) so bottom letters fill first

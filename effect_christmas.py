@@ -136,6 +136,11 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
         self.text_complete: bool = False
         self.fadeout_counter: int = 0
         self.spawn_stopped: bool = False
+        self.lights_to_activate: list = []  # Queue of (char, scene) to light up
+        self.light_delay: int = 0
+        self.input_chars: list = []  # Store input text characters
+        self.input_chars_revealed: bool = False
+        self.snow_accelerated: bool = False
         self.build()
 
     def is_outline_character(self, character: EffectCharacter) -> bool:
@@ -165,6 +170,36 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
 
     def build(self) -> None:
         """Build the initial state of the effect."""
+        # Get input text characters and store them
+        terminal_width = self.terminal.canvas.right - self.terminal.canvas.left + 1
+        center_col = self.terminal.canvas.left + terminal_width // 2
+
+        for idx, character in enumerate(self.terminal.get_characters()):
+            character.layer = 3  # Above tree and snow
+
+            # Keep original input position
+            final_pos = character.input_coord
+
+            # Slide in from sides effect
+            if final_pos.column < center_col:
+                start_col = self.terminal.canvas.left - 5  # Off-screen left
+            else:
+                start_col = self.terminal.canvas.right + 5  # Off-screen right
+
+            character.motion.set_coordinate(Coord(start_col, final_pos.row))
+
+            # Create slide path to original position
+            slide_path = character.motion.new_path(speed=0.4, ease=easing.out_back)
+            slide_path.new_waypoint(final_pos)
+            character.motion.activate_path(slide_path)
+
+            # Gold/yellow color like the star
+            scene = character.animation.new_scene()
+            scene.add_frame(character.input_symbol, 1, colors=ColorPair(fg=Color("ffd700")))
+            character.animation.activate_scene(scene)
+
+            self.input_chars.append(character)
+
         # Christmas tree ASCII art
         tree_lines = [
             "                        ,",
@@ -182,7 +217,7 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
             "               /&*,()~o`;-.,_ `\"\"\")",
             "               /`,@ ;+& () o*`;-';\\",
             "              (`\"\"--.,_0 +% @' &()\\",
-            "              /-.,_    ``''--....-'`)  *",
+            "              /-.,_    ``''--....-'`)",
             "              /@%;o`:;'--,.__   __.\'\\",
             "             ;*,&(); @ % &^;~`\"`o;@();          ",
             "             /(); o^~; & ().o@*&`;&%O\\",
@@ -211,11 +246,12 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
         max_line_width = max(len(line) for line in tree_lines)
         start_col = center_col - max_line_width // 2
 
-        # Create tree characters - NOW WITH CORRECT COORDINATE SYSTEM!
-        # Bottom = small number, Top = large number, ADD to go up
+        # Create tree characters - build from bottom with dull colors
+        self.tree_chars = []  # Store for later color change
+        char_with_rows = []  # Store (character, final_row) for sorting
+
         for line_index, line in enumerate(tree_lines):
             # Trunk (last line) at bottom, star (first line) higher up
-            # Reverse the tree so trunk is first
             reversed_index = tree_height - 1 - line_index
             row = self.terminal.canvas.bottom + reversed_index
 
@@ -223,30 +259,54 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
                 if char != ' ':  # Skip spaces
                     col = start_col + col_offset
 
-                    # Determine color based on position and symbol
-                    if line_index < 3:
-                        # Star at top - yellow/gold
-                        final_color = Color("ffd700")
-                    elif line_index >= tree_height - 2 or '#' in char:
-                        # Trunk at bottom - brown
-                        final_color = Color("8b4513")
-                    elif char in ornament_symbols:
-                        # Ornaments - colorful
-                        final_color = random.choice(ornament_colors)
-                    else:
-                        # Tree body - green
-                        final_color = Color("228b22")
-
                     tree_char = self.terminal.add_character(char, Coord(col, row))
-                    scene = tree_char.animation.new_scene()
-                    scene.add_frame(char, 1, colors=ColorPair(fg=final_color))
-                    tree_char.animation.activate_scene(scene)
-                    tree_char.motion.set_coordinate(Coord(col, row))
-                    self.terminal.set_character_visibility(tree_char, is_visible=True)
-                    self.active_characters.add(tree_char)
 
-        # Mark as complete
-        self.text_complete = True
+                    # Determine colors - dull while building, bright when complete
+                    is_star = line_index < 4  # Include one more line for the star
+                    is_trunk = line_index >= tree_height - 2 or '#' in char
+                    is_bauble = char in ornament_symbols
+
+                    if is_star:
+                        dull_color = Color("6b6b5a")  # Dull gray-gold
+                        bright_color = Color("ffd700")  # Bright gold
+                    elif is_trunk:
+                        dull_color = Color("8b4513")  # Brown (same)
+                        bright_color = Color("8b4513")
+                    elif is_bauble:
+                        dull_color = Color("4a4a4a")  # Dull gray
+                        bright_color = random.choice(ornament_colors)  # Bright color
+                    else:
+                        dull_color = Color("228b22")  # Green (same)
+                        bright_color = Color("228b22")
+
+                    # Create dull scene (building)
+                    dull_scene = tree_char.animation.new_scene()
+                    dull_scene.add_frame(char, 1, colors=ColorPair(fg=dull_color))
+
+                    # Create bright scene (complete)
+                    bright_scene = tree_char.animation.new_scene()
+                    bright_scene.add_frame(char, 1, colors=ColorPair(fg=bright_color))
+
+                    # Start with dull color
+                    tree_char.animation.activate_scene(dull_scene)
+
+                    # Create slide-down animation
+                    # Start character at top, slide down to final position
+                    start_row = self.terminal.canvas.top
+                    tree_char.motion.set_coordinate(Coord(col, start_row))
+
+                    # Create path from top to final position
+                    slide_path = tree_char.motion.new_path(speed=0.3, ease=easing.out_quad)
+                    slide_path.new_waypoint(Coord(col, row))
+                    tree_char.motion.activate_path(slide_path)
+
+                    # Store character with its bright scene for later
+                    self.tree_chars.append((tree_char, bright_scene, is_star or is_bauble))
+                    char_with_rows.append((tree_char, row))
+
+        # Sort by final row (ascending = bottom first, since bottom is smallest number)
+        char_with_rows.sort(key=lambda x: x[1])
+        self.pending_chars = [char for char, _ in char_with_rows]
 
     def spawn_background_snowflake(self, speed_multiplier: float = 1.0) -> None:
         """Spawn a background snowflake that falls to the bottom.
@@ -299,56 +359,102 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
         """Check if background snow has landed and stack it."""
         for snow in list(self.background_snow):
             if not snow.motion.active_path:
-                snow_coord = snow.motion.current_coord
-                landing_column = snow_coord.column
-
-                if landing_column not in self.bottom_pile_height:
-                    self.bottom_pile_height[landing_column] = 0
-
-                # Stack snow at bottom (max height 5) - subtract to stack upward
-                if self.bottom_pile_height[landing_column] < 5:
-                    stacked_row = self.terminal.canvas.bottom - self.bottom_pile_height[landing_column]
-                    snow.motion.set_coordinate(Coord(landing_column, stacked_row))
-                    self.bottom_pile_height[landing_column] += 1
-                else:
-                    # Pile is full, remove this snowflake
+                # If spawning has stopped, just remove snow without stacking
+                if self.spawn_stopped:
                     self.terminal.set_character_visibility(snow, is_visible=False)
                     self.background_snow.remove(snow)
+                else:
+                    snow_coord = snow.motion.current_coord
+                    landing_column = snow_coord.column
+
+                    if landing_column not in self.bottom_pile_height:
+                        self.bottom_pile_height[landing_column] = 0
+
+                    # Stack snow at bottom (max height 5) - subtract to stack upward
+                    if self.bottom_pile_height[landing_column] < 5:
+                        stacked_row = self.terminal.canvas.bottom - self.bottom_pile_height[landing_column]
+                        snow.motion.set_coordinate(Coord(landing_column, stacked_row))
+                        self.bottom_pile_height[landing_column] += 1
+                    else:
+                        # Pile is full, remove this snowflake
+                        self.terminal.set_character_visibility(snow, is_visible=False)
+                        self.background_snow.remove(snow)
 
     def __next__(self) -> str:
         """Return the next frame in the animation."""
-        # Build tree from bottom to top
+        # Build tree from bottom to top - slowly
         if self.pending_chars:
-            # Release 5-10 characters at a time for faster build (no delay)
-            num_to_spawn = min(random.randint(5, 10), len(self.pending_chars))
-            for _ in range(num_to_spawn):
-                if self.pending_chars:
-                    # Pop from front (bottom characters first due to reverse sort)
-                    next_character = self.pending_chars.pop(0)
-                    self.terminal.set_character_visibility(next_character, is_visible=True)
-                    self.active_characters.add(next_character)
+            if self.text_spawn_delay <= 0:
+                # Release 1-2 characters at a time for slow build
+                num_to_spawn = min(random.randint(1, 2), len(self.pending_chars))
+                for _ in range(num_to_spawn):
+                    if self.pending_chars:
+                        # Pop from front (bottom characters first)
+                        next_character = self.pending_chars.pop(0)
+                        self.terminal.set_character_visibility(next_character, is_visible=True)
+                        self.active_characters.add(next_character)
+                self.text_spawn_delay = 2  # Delay between spawns
+            else:
+                self.text_spawn_delay -= 1
 
         elif not self.text_complete:
-            # Check if all text characters have landed (completed their paths and turned red)
-            all_text_landed = not self.pending_chars
-            if all_text_landed:
-                # Check if any text characters still have active paths
-                for char in self.terminal.get_characters():
-                    if char.motion.active_path:
-                        all_text_landed = False
-                        break
+            # Check if all tree characters have finished their animations
+            all_settled = True
+            for tree_char, _, _ in self.tree_chars:
+                if tree_char.motion.active_path:
+                    all_settled = False
+                    break
 
-            if all_text_landed:
-                # Text completely filled with red, start fadeout
+            if all_settled:
+                # Tree is fully built and settled - prepare to light up baubles and star!
                 self.text_complete = True
-                # Speed up all existing background snow by creating new fast paths
+                # Collect lights to activate (baubles and star)
+                lights = []
+                for tree_char, bright_scene, should_pop in self.tree_chars:
+                    if should_pop:  # Only baubles and star
+                        row = tree_char.motion.current_coord.row
+                        lights.append((row, tree_char, bright_scene))
+                # Sort by row (ascending = bottom first)
+                lights.sort(key=lambda x: x[0])
+                self.lights_to_activate = [(char, scene) for _, char, scene in lights]
+
+        # Light up baubles one by one
+        if self.text_complete and self.lights_to_activate:
+            if self.light_delay <= 0:
+                # Light up 1 bauble/light
+                if self.lights_to_activate:
+                    char, scene = self.lights_to_activate.pop(0)
+                    char.animation.activate_scene(scene)
+                self.light_delay = 3  # Delay between each light
+            else:
+                self.light_delay -= 1
+
+        # Reveal input text after lights are done
+        if self.text_complete and not self.lights_to_activate and not self.input_chars_revealed:
+            self.input_chars_revealed = True
+            for character in self.input_chars:
+                self.terminal.set_character_visibility(character, is_visible=True)
+                self.active_characters.add(character)
+
+        # Accelerate snow when omarchy animation completes
+        if self.input_chars_revealed and not self.snow_accelerated:
+            # Check if all input characters have finished their animations
+            all_omarchy_settled = True
+            for character in self.input_chars:
+                if character.motion.active_path:
+                    all_omarchy_settled = False
+                    break
+
+            if all_omarchy_settled:
+                self.snow_accelerated = True
+                # Speed up all existing background snow by 50%
                 for snow in self.background_snow:
                     if snow.motion.active_path:
                         # Get current position
                         current_pos = snow.motion.current_coord
-                        # Create new fast path from current position to bottom
-                        fast_speed = self.config.movement_speed * 5.0  # Half as fast (5x instead of 10x)
-                        new_path = snow.motion.new_path(speed=fast_speed, ease=easing.in_quad)
+                        # Create new faster path from current position to bottom
+                        faster_speed = self.config.movement_speed * 2.5  # 50% faster than current 2x
+                        new_path = snow.motion.new_path(speed=faster_speed, ease=easing.in_quad)
                         new_path.new_waypoint(Coord(current_pos.column, self.terminal.canvas.bottom))
                         snow.motion.activate_path(new_path)
 
@@ -361,17 +467,19 @@ class ChristmasIterator(BaseEffectIterator[ChristmasConfig]):
                 else:
                     if self.background_spawn_delay <= 0:
                         # After tree complete: gentle continuous snow
+                        # Speed up snow after omarchy is revealed
+                        speed = 2.0 if self.input_chars_revealed else 1.0
                         if random.random() < 0.15:  # 15% chance to spawn
-                            self.spawn_background_snowflake()
+                            self.spawn_background_snowflake(speed_multiplier=speed)
                         self.background_spawn_delay = 3
                     else:
                         self.background_spawn_delay -= 1
             else:
-                # While building tree - minimal background snow
+                # While building tree - moderate background snow
                 if self.background_spawn_delay <= 0:
-                    if random.random() < 0.1:  # Only 10% chance to spawn
+                    if random.random() < 0.25:  # 25% chance to spawn
                         self.spawn_background_snowflake()
-                    self.background_spawn_delay = 8  # Longer delay
+                    self.background_spawn_delay = 3  # Shorter delay
                 else:
                     self.background_spawn_delay -= 1
 
