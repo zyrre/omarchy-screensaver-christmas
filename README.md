@@ -1,5 +1,10 @@
 Get in the christmas spirit with these effects for the Omarchy screensaver.
 
-GIFS
+Just add the ones you want to the tte effects folder(in current omarchy version its ~/.local/share/mise/installs/python/3.14.0/lib/python3.14/site-packages/terminaltexteffects/effects) and they will be in the rotation.
 
-Install instructions:
+effect_christmas:
+![GIFS](https://github.com/zyrre/omarchy-screensaver-christmas/blob/main/christmas.GIF)
+effect_snow:
+![GIFS](https://github.com/zyrre/omarchy-screensaver-christmas/blob/main/snow.GIF)
+effect_moresnow:
+![GIFS](https://github.com/zyrre/omarchy-screensaver-christmas/blob/main/moresnow.GIF)
